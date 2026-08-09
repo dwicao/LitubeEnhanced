@@ -112,6 +112,11 @@ Pre-built APKs are available on the [Releases page](https://github.com/dwicao/Li
 **Voice search**
 - Runtime microphone permission request with a "go to Settings" fallback when denied.
 
+**Optimizations**
+- Downloads: chunk-read buffer raised 8KB → 64KB (fewer syscalls/lock/UI-progress churn; faster downloads).
+- Tab switching: WebView offscreen pre-rastering, so switching tabs shows the page instantly.
+- Thumbnails: list thumbnails (queue, watch history, downloads, playlist) are now decoded at the view size via Picasso `.fit()` instead of full source resolution — much lower memory and bandwidth in list-heavy screens; the gallery's zoomable photo viewer keeps full resolution.
+
 ---
 
 ## 📄 License
