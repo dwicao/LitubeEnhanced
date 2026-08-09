@@ -42,6 +42,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.hhst.youtubelite.Constant;
 import com.hhst.youtubelite.R;
+import com.hhst.youtubelite.ui.MainActivity;
 import com.hhst.youtubelite.browser.TabManager;
 import com.hhst.youtubelite.browser.YoutubeFragment;
 import com.hhst.youtubelite.extension.ExtensionManager;
@@ -55,6 +56,7 @@ import com.hhst.youtubelite.player.controller.gesture.ZoomTouchListener;
 import com.hhst.youtubelite.player.engine.Engine;
 import com.hhst.youtubelite.player.queue.QueueNav;
 import com.hhst.youtubelite.util.DeviceUtils;
+import com.hhst.youtubelite.util.DexUtils;
 import com.hhst.youtubelite.util.ImageUtils;
 import com.hhst.youtubelite.util.UrlUtils;
 import com.hhst.youtubelite.util.ViewUtils;
@@ -480,13 +482,25 @@ public class Controller {
 
 		ImageButton fsBtn = playerView.findViewById(R.id.btn_fullscreen);
 		if (fsBtn != null) {
-			fsBtn.setOnClickListener(v -> {
-				if (!isFullscreen()) {
-					enterFullscreen();
-				} else {
-					exitFullscreen();
-				}
-			});
+			if (DexUtils.isDeXRunning(activity) && prefs.isDeXModeEnabled()) {
+				// DeX: fullscreen is forced on (videos always open fullscreen and cannot exit),
+				// so the fullscreen button becomes a Download button instead.
+				fsBtn.setImageResource(R.drawable.ic_download);
+				fsBtn.setContentDescription(activity.getString(R.string.download));
+				fsBtn.setOnClickListener(v -> {
+					if (activity instanceof MainActivity mainActivity) {
+						mainActivity.downloadCurrentVideo();
+					}
+				});
+			} else {
+				fsBtn.setOnClickListener(v -> {
+					if (!isFullscreen()) {
+						enterFullscreen();
+					} else {
+						exitFullscreen();
+					}
+				});
+			}
 		}
 
 		ImageButton loopBtn = playerView.findViewById(R.id.btn_loop);
@@ -580,8 +594,13 @@ public class Controller {
 					String selected = values[index];
 					engine.onQualitySelected(selected);
 					qualityView.setText(label);
-					String js = String.format("(function(t){const p=document.querySelector('#movie_player');const ls=p.getAvailableQualityLabels();const v=l=>parseInt(l.replace(/\\D/g,''));const target=v(t);const closest=ls.reduce((b,c,i)=>Math.abs(v(c)-target)<Math.abs(v(ls[b])-target)?i:b,0);const quality=p.getAvailableQualityLevels()[closest];p.setPlaybackQualityRange(quality,quality);})('%s')", label);
-					tabManager.evaluateJavascript(js, null);
+					if (!DexUtils.isDeXRunning(activity)) {
+						// In DeX the app player covers the whole window, so syncing the desktop
+						// page's own player is pointless and makes it re-buffer behind the app
+						// player (visible as a see-through/flickering player during the switch).
+						String js = String.format("(function(t){const p=document.querySelector('#movie_player');const ls=p.getAvailableQualityLabels();const v=l=>parseInt(l.replace(/\\D/g,''));const target=v(t);const closest=ls.reduce((b,c,i)=>Math.abs(v(c)-target)<Math.abs(v(ls[b])-target)?i:b,0);const quality=p.getAvailableQualityLevels()[closest];p.setPlaybackQualityRange(quality,quality);})('%s')", label);
+						tabManager.evaluateJavascript(js, null);
+					}
 				});
 			});
 		}
@@ -891,6 +910,12 @@ public class Controller {
 
 	public void exitFullscreen() {
 		if (!state.isFullscreen()) return;
+		if (DexUtils.isDeXRunning(activity) && prefs.isDeXModeEnabled()) {
+			// DeX: videos stay fullscreen — the small/overlay mode is disabled (videos open
+			// in fullscreen via LitePlayer.play), so ignore exit requests from the F key,
+			// the on-screen fullscreen button, and the back button.
+			return;
+		}
 		if (shouldRequestPortraitOnManualExit(true, orientation(), previousOrientationBeforeFullscreen)) {
 			beginManualPortraitLock();
 			playerView.requestPortraitNormalState();

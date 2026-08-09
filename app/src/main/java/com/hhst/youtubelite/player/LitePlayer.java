@@ -22,6 +22,7 @@ import com.hhst.youtubelite.extractor.YoutubeExtractor;
 import com.hhst.youtubelite.extractor.exception.ExtractionException;
 import com.hhst.youtubelite.extractor.exception.LoginRequiredExtractionException;
 import com.hhst.youtubelite.player.common.PlayerLoopMode;
+import com.hhst.youtubelite.ui.MainActivity;
 import com.hhst.youtubelite.player.common.PlayerPreferences;
 import com.hhst.youtubelite.player.controller.Controller;
 import com.hhst.youtubelite.player.engine.Engine;
@@ -32,6 +33,7 @@ import com.hhst.youtubelite.player.sponsor.SponsorBlockManager;
 import com.hhst.youtubelite.player.sponsor.SponsorOverlayView;
 import com.hhst.youtubelite.ui.ErrorDialog;
 import com.hhst.youtubelite.util.DeviceUtils;
+import com.hhst.youtubelite.util.DexUtils;
 import com.tencent.mmkv.MMKV;
 
 import org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException;
@@ -245,6 +247,17 @@ public class LitePlayer {
 			controller.syncRotation(
 							DeviceUtils.isRotateOn(activity),
 							activity.getResources().getConfiguration().orientation);
+			// DeX: play every video in fullscreen by default and keep it there — exiting
+			// to the small/overlay mode is disabled in DeX (see Controller.exitFullscreen
+			// and MainActivity's F-key handling).
+			if (DexUtils.isDeXRunning(activity) && prefs.isDeXModeEnabled()) {
+				controller.enterFullscreen();
+			}
+			if (activity instanceof MainActivity mainActivity) {
+				// DeX: hide the page behind the fullscreen player (no click-through possible)
+				// and block any touches that still reach it.
+				mainActivity.updateWebViewForDeXPlayer(true);
+			}
 		});
 
 		cancelExtraction();
@@ -405,6 +418,13 @@ public class LitePlayer {
 			exitInAppMiniPlayer();
 			setMiniPlayerCallbacks(null, null);
 			playerView.hide();
+			if (activity instanceof MainActivity mainActivity) {
+				// DeX: bring the page back so Back never leaves a blank screen.
+				mainActivity.updateWebViewForDeXPlayer(false);
+			}
+			// DeX: the player was covering the WebView — force the page behind to redraw
+			// (its rendering surface is often lost while covered → blank screen).
+			playerView.refreshWebViewAfterDeXFullscreenExit();
 			engine.clear();
 			if (playbackSvc != null) {
 				playbackSvc.hideNotification();
@@ -472,6 +492,10 @@ public class LitePlayer {
 	}
 
 	public void enterInAppMiniPlayer() {
+		if (DexUtils.isDeXRunning(activity) && prefs.isDeXModeEnabled()) {
+			// DeX: no small floating window — the video stays fullscreen.
+			return;
+		}
 		inMiniPlayer = true;
 		stateStore.setInMiniPlayer(true);
 		playerView.enterInAppMiniPlayer();
@@ -483,6 +507,14 @@ public class LitePlayer {
 		stateStore.setInMiniPlayer(false);
 		playerView.exitInAppMiniPlayer();
 		controller.exitMiniPlayer();
+	}
+
+	/**
+	 * DeX Mode: resizes the floating (mini) player window by the given width delta in dp
+	 * (positive = bigger). Wired to the scroll wheel over the player in DeX Mode.
+	 */
+	public void resizeInAppMiniPlayer(int widthDeltaDp) {
+		playerView.adjustMiniPlayerWidth(widthDeltaDp);
 	}
 
 	public void restoreInAppMiniPlayerUiIfNeeded() {

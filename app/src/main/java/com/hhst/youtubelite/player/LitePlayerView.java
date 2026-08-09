@@ -18,6 +18,7 @@ import android.view.ViewOutlineProvider;
 import android.view.ViewTreeObserver;
 import android.view.ViewParent;
 import android.view.animation.OvershootInterpolator;
+import android.webkit.WebView;
 import android.widget.ImageButton;
 import android.widget.TextView;
 
@@ -174,12 +175,58 @@ public class LitePlayerView extends PlayerView {
 	                                 int defaultResizeMode) {
 		post(() -> {
 			switch (newState) {
-				case NORMAL, MINI_PLAYER -> applyNormalState(defaultResizeMode);
+				case NORMAL, MINI_PLAYER -> {
+					applyNormalState(defaultResizeMode);
+					// DeX: the fullscreen player covered the WebView for a while; on the way back
+					// out, the WebView's rendering surface is often lost (black page around the
+					// player). Force it to recreate its surface.
+					if (previousState == ControllerState.Mode.FULLSCREEN_UNLOCK
+									|| previousState == ControllerState.Mode.FULLSCREEN_LOCK) {
+						refreshWebViewAfterDeXFullscreenExit();
+					}
+				}
 				case FULLSCREEN_UNLOCK, FULLSCREEN_LOCK ->
 								applyFullscreenState(previousState, fsOrientation, defaultResizeMode);
 				case PIP -> applyPictureInPictureState(previousState);
 			}
 		});
+	}
+
+	/**
+	 * DeX only: the WebView (desktop YouTube page) behind the player often stops rendering
+	 * after the player covered it — everything around/behind the player is black with no
+	 * comments/related videos. {@code invalidate()} is not enough because the WebView's
+	 * rendering surface was destroyed; drop its hardware layer and toggle visibility to
+	 * force the surface to be recreated. Called when leaving fullscreen and when the
+	 * player is hidden in DeX.
+	 */
+	public void refreshWebViewAfterDeXFullscreenExit() {
+		if (!DexUtils.isDeXRunning(activity)) return;
+		post(() -> {
+			View container = getParent() instanceof View parentView
+							? parentView.findViewById(R.id.fragment_container) : null;
+			View webView = findWebViewChild(container);
+			if (webView == null) return;
+			webView.setLayerType(View.LAYER_TYPE_NONE, null);
+			webView.setVisibility(View.INVISIBLE);
+			webView.post(() -> {
+				webView.setVisibility(View.VISIBLE);
+				webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+			});
+		});
+	}
+
+	@Nullable
+	private static View findWebViewChild(@Nullable View root) {
+		if (root == null) return null;
+		if (root instanceof WebView) return root;
+		if (root instanceof ViewGroup group) {
+			for (int i = 0; i < group.getChildCount(); i++) {
+				View found = findWebViewChild(group.getChildAt(i));
+				if (found != null) return found;
+			}
+		}
+		return null;
 	}
 
 	public void updatePlayerLayout(boolean fullscreen) {
@@ -663,7 +710,9 @@ public class LitePlayerView extends PlayerView {
 	private void loadPersistedMiniPlayerLayoutState() {
 		PlayerPreferences.MiniPlayerLayoutState state = prefs.getMiniPlayerLayoutState();
 		int screenWidthDp = getScreenWidthDp();
-		int defaultWidthDp = MiniPlayerLayout.minWidthDpForScreen(screenWidthDp);
+		int defaultWidthDp = DexUtils.isDeXRunning(activity)
+						? MiniPlayerLayout.clampWidthDp(screenWidthDp, screenWidthDp / 2)
+						: MiniPlayerLayout.minWidthDpForScreen(screenWidthDp);
 		miniPlayerWidthOverrideDp = state.widthDp() > 0
 						? MiniPlayerLayout.clampWidthDp(screenWidthDp, state.widthDp())
 						: defaultWidthDp;
@@ -783,17 +832,10 @@ public class LitePlayerView extends PlayerView {
 		activity.setRequestedOrientation(requestedOrientation);
 		portraitNormalStateRequested = false;
 		ViewUtils.setFullscreen(activity.getWindow().getDecorView(), false);
+		// DeX: videos are forced fullscreen (LitePlayer.play enters fullscreen on open and
+		// Controller.exitFullscreen is disabled in DeX), so the normal overlay only ever
+		// appears briefly on the way in.
 		updatePlayerLayout(false);
-		applyDeXPlayerWidth(0.7f);
-		if (DexUtils.isDeXRunning(activity)) {
-			// DeX: keep the 70/30 split (player left, WebView/related/comments right) in the
-			// normal state too, and make the player take focus so keyboard shortcuts work
-			// right after a video opens (the WebView keeps focus only when the user clicks it,
-			// e.g. to type in the search box).
-			setFocusable(true);
-			setFocusableInTouchMode(true);
-			requestFocus();
-		}
 		setResizeMode(inAppMiniPlayer ? AspectRatioFrameLayout.RESIZE_MODE_FIT : defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(false);
@@ -806,12 +848,10 @@ public class LitePlayerView extends PlayerView {
 		if (previousState == ControllerState.Mode.NORMAL && !activity.isInPictureInPictureMode()) {
 			normalHeight = playerHeight;
 		}
-		setParentInsetsSuppressed(true);
-		// DeX Mode: the window is a desktop freeform window — forcing orientation or hiding
-		// the system UI would fight the DeX taskbar, so only the orientation request is kept
-		// on phones. On DeX the player is narrowed to 70% of the width so the WebView (video
-		// description + comments) stays visible on the right 30%, like a desktop video page.
 		boolean deX = DexUtils.isDeXRunning(activity);
+		// In DeX the window is a desktop freeform window with no system bars, so insets
+		// suppression is pointless churn — keep it phone-only.
+		if (!deX) setParentInsetsSuppressed(true);
 		if (!deX) {
 			activity.setRequestedOrientation(fsOrientation);
 			ViewUtils.setFullscreen(activity.getWindow().getDecorView(), true);
@@ -824,35 +864,22 @@ public class LitePlayerView extends PlayerView {
 			requestFocus();
 		}
 		updatePlayerLayout(true);
-		// DeX fullscreen maximizes the video across the full window (like a desktop player);
-		// the 70/30 split is only used in the normal state so the WebView stays visible
-		// beside the player. Full width also avoids the surface-resize blank screen.
-		applyDeXPlayerWidth(1.0f);
 		setResizeMode(defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(true);
 	}
 
 	/**
-	 * DeX Mode: resizes the player to the given fraction of its parent's width (1.0 = full
-	 * width, 0.7 = left 70% so the WebView shows on the right 30%). Uses a concrete pixel
-	 * width (like the mini player does) instead of the percent-width constraint — a fixed
-	 * size can never resolve to 0 and avoids the SurfaceView blank-screen on resize. No-op
-	 * outside DeX and while the mini player is active (it manages its own width).
+	 * DeX only: resize the floating (mini) player window by the given width delta in dp
+	 * (positive = bigger). Scroll-wheel gesture over the mini player in DeX Mode.
 	 */
-	private void applyDeXPlayerWidth(float percent) {
-		if (!DexUtils.isDeXRunning(activity)) return;
-		if (inAppMiniPlayer) return;
-		if (!(getLayoutParams() instanceof ConstraintLayout.LayoutParams constraintParams)) return;
-		ViewGroup parent = getParent() instanceof ViewGroup viewGroup ? viewGroup : null;
-		int parentWidth = parent != null ? parent.getWidth() : 0;
-		if (parentWidth <= 0) {
-			parentWidth = ViewUtils.getScreenWidth(activity);
-		}
-		constraintParams.width = Math.max(1, (int) (parentWidth * percent));
-		constraintParams.matchConstraintPercentWidth = 0.0f;
-		constraintParams.horizontalBias = percent >= 1.0f ? 0.5f : 0.0f;
-		requestLayout();
+	public void adjustMiniPlayerWidth(int widthDeltaDp) {
+		if (!inAppMiniPlayer) return;
+		int currentWidthDp = miniPlayerWidthOverrideDp > 0
+						? miniPlayerWidthOverrideDp
+						: MiniPlayerLayout.computeWidthDp(getScreenWidthDp());
+		int targetWidthDp = Math.max(1, currentWidthDp + widthDeltaDp);
+		applyMiniPlayerSizeOverridePx(ViewUtils.dpToPx(activity, targetWidthDp));
 	}
 
 	private void applyPictureInPictureState(@NonNull ControllerState.Mode previousState) {

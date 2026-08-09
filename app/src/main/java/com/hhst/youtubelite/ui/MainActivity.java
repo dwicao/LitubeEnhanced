@@ -21,6 +21,7 @@ import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.TextView;
@@ -31,6 +32,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.app.ActivityCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -137,6 +139,14 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 	private boolean musicMuted;
 	private int lastMusicVolume = -1;
 	private static final String DEX_WINDOW_PREFS = "dex_window";
+	/**
+	 * DeX only: opaque black overlay placed between the WebView and the player while the
+	 * player is open. It blanks the page (no click-through possible) without hiding the
+	 * WebView view itself — the page keeps rendering, so its player stays muted/paused via
+	 * the injected sync script instead of autoplaying and stealing audio focus.
+	 */
+	@Nullable
+	private View deXBlankOverlay;
 
 	static boolean shouldEnterPictureInPicture(@Nullable LitePlayer player,
 	                                           @Nullable ExtensionManager extensionManager,
@@ -367,7 +377,9 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 				adjustVolumeBy(false);
 				return true;
 			case KeyEvent.KEYCODE_F:
-				if (event.getRepeatCount() == 0) {
+				// DeX: fullscreen is forced on (videos open fullscreen and can't exit), so
+				// the F toggle is disabled here; outside DeX it toggles fullscreen normally.
+				if (event.getRepeatCount() == 0 && !isDeXModeActive()) {
 					if (player.isFullscreen()) player.exitFullscreen();
 					else player.enterFullscreen();
 				}
@@ -376,7 +388,17 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 				if (event.getRepeatCount() == 0) toggleMute();
 				return true;
 			case KeyEvent.KEYCODE_ESCAPE:
-				if (event.getRepeatCount() == 0 && player.isFullscreen()) player.exitFullscreen();
+				// Esc = back: in DeX it closes the video and returns to the previous page
+				// (same as the Back button); outside DeX it exits fullscreen.
+				if (event.getRepeatCount() == 0) {
+					if (isDeXModeActive()) handleAppBack();
+					else if (player.isFullscreen()) player.exitFullscreen();
+				}
+				return true;
+			case KeyEvent.KEYCODE_T:
+				// DeX: consume YouTube's page shortcut for theater mode — the desktop page
+				// behind the fullscreen player must not re-layout (it causes the WebView
+				// surface to die → blank screen).
 				return true;
 			default:
 				return false;
@@ -391,13 +413,27 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 	@Override
 	public boolean dispatchGenericMotionEvent(@NonNull MotionEvent event) {
 		if (isDeXModeActive() && player != null && player.isPlaybackOpen() && !DeviceUtils.isInPictureInPictureMode(this)) {
-			if (event.getAction() == MotionEvent.ACTION_SCROLL && isEventOverPlayer(event)) {
-				float delta = event.getAxisValue(MotionEvent.AXIS_SCROLL);
-				if (delta > 0) adjustVolumeBy(true);
-				else if (delta < 0) adjustVolumeBy(false);
+			int action = event.getActionMasked();
+			// Phantom clicks (mouse primary button) delivered after a popup dismiss can
+			// bypass the overlay and reach the WebView behind the fullscreen player. Consume
+			// every primary-button press while the player is open; the secondary button is
+			// kept for the context menu.
+			if (action == MotionEvent.ACTION_BUTTON_PRESS
+							&& (event.getButtonState() & MotionEvent.BUTTON_PRIMARY) != 0) {
 				return true;
 			}
-			if (event.getAction() == MotionEvent.ACTION_BUTTON_PRESS
+			if (action == MotionEvent.ACTION_SCROLL && isEventOverPlayer(event)) {
+				float delta = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+				if (player.isInMiniPlayer()) {
+					// DeX: scroll wheel over the floating player window resizes it.
+					player.resizeInAppMiniPlayer(delta > 0 ? 30 : -30);
+				} else {
+					if (delta > 0) adjustVolumeBy(true);
+					else if (delta < 0) adjustVolumeBy(false);
+				}
+				return true;
+			}
+			if (action == MotionEvent.ACTION_BUTTON_PRESS
 							&& (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0
 							&& isEventOverPlayer(event)) {
 				showPlayerContextMenu();
@@ -414,6 +450,60 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 						&& rect.contains((int) event.getRawX(), (int) event.getRawY());
 	}
 
+	/**
+	 * DeX only: while the fullscreen player is open, the WebView page behind it must never
+	 * receive clicks — dismissing the quality/speed popup can deliver a phantom click to
+	 * the view below (the page), which would open a related video instead of changing
+	 * quality. This listener consumes every touch that reaches the WebView while a video is
+	 * open; when no video is open it returns false and the page works normally.
+	 */
+	private final View.OnTouchListener webViewTouchBlocker = (v, event) ->
+					isDeXModeActive() && player != null && player.isPlaybackOpen();
+
+	/**
+	 * DeX only: while the player is open (always fullscreen in DeX), the WebView page
+	 * behind it is hidden entirely (rendered blank) so clicks can never pass through to it
+	 * — even phantom mouse/generic-motion clicks delivered after dismissing the quality
+	 * popup. When the player closes the page is shown again (its surface is repaired by
+	 * LitePlayerView.refreshWebViewAfterDeXFullscreenExit), so Back never leaves a blank
+	 * screen.
+	 */
+	public void updateWebViewForDeXPlayer(boolean playerOpen) {
+		YoutubeWebview webView = getWebView();
+		if (webView != null) {
+			if (playerOpen) {
+				webView.setOnTouchListener(webViewTouchBlocker);
+			} else {
+				webView.setOnTouchListener(null);
+			}
+		}
+		if (isDeXModeActive()) {
+			// DeX: cover the page with an opaque blank overlay while the player is open —
+			// visually blank and unclickable, but the WebView stays visible/rendering so the
+			// page player sync script (mute + pause) still runs. Back removes the overlay.
+			View overlay = ensureDeXBlankOverlay();
+			overlay.setVisibility(playerOpen ? View.VISIBLE : View.GONE);
+		}
+	}
+
+	private View ensureDeXBlankOverlay() {
+		if (deXBlankOverlay != null) return deXBlankOverlay;
+		View overlay = new View(this);
+		overlay.setBackgroundColor(android.graphics.Color.BLACK);
+		overlay.setClickable(true);
+		// Consume every touch that reaches it — nothing can pass through to the page.
+		overlay.setOnTouchListener((v, event) -> true);
+		ViewGroup root = findViewById(R.id.main);
+		if (root != null) {
+			// Insert between the WebView container (index 0) and the player (index 1) so the
+			// player stays on top.
+			root.addView(overlay, 1, new ConstraintLayout.LayoutParams(
+							ViewGroup.LayoutParams.MATCH_PARENT,
+							ViewGroup.LayoutParams.MATCH_PARENT));
+		}
+		deXBlankOverlay = overlay;
+		return overlay;
+	}
 	private void adjustVolumeBy(boolean up) {
 		if (audioManager == null) return;
 		audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
@@ -820,6 +910,16 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 		return url == null || url.isBlank() ? null : url;
 	}
 
+	/**
+	 * Opens the download dialog for the currently open video (used by the DeX player's
+	 * download button, which replaces the useless fullscreen button in DeX Mode).
+	 */
+	public void downloadCurrentVideo() {
+		String url = currentUrl();
+		if (url == null || youtubeExtractor == null) return;
+		new DownloadDialog(url, this, youtubeExtractor).show();
+	}
+
 	public void handleAppBack() {
 		if (DeviceUtils.isInPictureInPictureMode(this)) {
 			if (appBackCallback != null) {
@@ -832,7 +932,18 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 			return;
 		}
 		if (player != null && player.isFullscreen()) {
-			player.exitFullscreen();
+			if (isDeXModeActive()) {
+				// DeX: fullscreen is forced (no small mode), so back closes the video
+				// entirely and returns to the page the user was on before.
+				player.hide();
+				YoutubeWebview webview = getWebView();
+				if (webview != null && tabManager != null) {
+					tabManager.evaluateJavascript("window.dispatchEvent(new Event('onGoBack'));", null);
+				}
+				if (tabManager != null) tabManager.goBack();
+			} else {
+				player.exitFullscreen();
+			}
 			return;
 		}
 		YoutubeWebview webview = getWebView();
