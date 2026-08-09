@@ -377,6 +377,11 @@ public class LitePlayerView extends PlayerView {
 		if (inAppMiniPlayer && handleMiniPlayerTouch(event)) {
 			return true;
 		}
+		if (DexUtils.isDeXRunning(activity) && event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+			// DeX: clicking the player returns keyboard-shortcut focus to it (desktop UX:
+			// clicks on the player enable F/Space/arrows; clicks on the page go to the page).
+			requestFocus();
+		}
 		return super.dispatchTouchEvent(event);
 	}
 
@@ -779,7 +784,16 @@ public class LitePlayerView extends PlayerView {
 		portraitNormalStateRequested = false;
 		ViewUtils.setFullscreen(activity.getWindow().getDecorView(), false);
 		updatePlayerLayout(false);
-		applyDeXPlayerWidth(1.0f);
+		applyDeXPlayerWidth(0.7f);
+		if (DexUtils.isDeXRunning(activity)) {
+			// DeX: keep the 70/30 split (player left, WebView/related/comments right) in the
+			// normal state too, and make the player take focus so keyboard shortcuts work
+			// right after a video opens (the WebView keeps focus only when the user clicks it,
+			// e.g. to type in the search box).
+			setFocusable(true);
+			setFocusableInTouchMode(true);
+			requestFocus();
+		}
 		setResizeMode(inAppMiniPlayer ? AspectRatioFrameLayout.RESIZE_MODE_FIT : defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(false);
@@ -810,7 +824,10 @@ public class LitePlayerView extends PlayerView {
 			requestFocus();
 		}
 		updatePlayerLayout(true);
-		applyDeXPlayerWidth(deX ? 0.7f : 1.0f);
+		// DeX fullscreen maximizes the video across the full window (like a desktop player);
+		// the 70/30 split is only used in the normal state so the WebView stays visible
+		// beside the player. Full width also avoids the surface-resize blank screen.
+		applyDeXPlayerWidth(1.0f);
 		setResizeMode(defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(true);
@@ -818,15 +835,22 @@ public class LitePlayerView extends PlayerView {
 
 	/**
 	 * DeX Mode: resizes the player to the given fraction of its parent's width (1.0 = full
-	 * width, 0.7 = left 70% so the WebView shows on the right 30%). No-op outside DeX and
-	 * while the mini player is active (it manages its own width).
+	 * width, 0.7 = left 70% so the WebView shows on the right 30%). Uses a concrete pixel
+	 * width (like the mini player does) instead of the percent-width constraint — a fixed
+	 * size can never resolve to 0 and avoids the SurfaceView blank-screen on resize. No-op
+	 * outside DeX and while the mini player is active (it manages its own width).
 	 */
 	private void applyDeXPlayerWidth(float percent) {
 		if (!DexUtils.isDeXRunning(activity)) return;
 		if (inAppMiniPlayer) return;
 		if (!(getLayoutParams() instanceof ConstraintLayout.LayoutParams constraintParams)) return;
-		constraintParams.width = 0;
-		constraintParams.matchConstraintPercentWidth = percent;
+		ViewGroup parent = getParent() instanceof ViewGroup viewGroup ? viewGroup : null;
+		int parentWidth = parent != null ? parent.getWidth() : 0;
+		if (parentWidth <= 0) {
+			parentWidth = ViewUtils.getScreenWidth(activity);
+		}
+		constraintParams.width = Math.max(1, (int) (parentWidth * percent));
+		constraintParams.matchConstraintPercentWidth = 0.0f;
 		constraintParams.horizontalBias = percent >= 1.0f ? 0.5f : 0.0f;
 		requestLayout();
 	}

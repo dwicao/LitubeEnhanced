@@ -363,6 +363,8 @@ public class YoutubeWebview extends WebView {
 						&& extensionManager.isEnabled(Constant.DEX_MODE);
 		if (deXDesktopMode) {
 			settings.setUserAgentString(DESKTOP_USER_AGENT);
+			// DeX: the desktop layout renders at 100% scale via the wide-viewport settings
+			// already enabled above (setLoadWithOverviewMode + setUseWideViewPort).
 		}
 
 		JavascriptInterface jsInterface = new JavascriptInterface(this, youtubeExtractor, player, extensionManager, tabManager, queueRepository);

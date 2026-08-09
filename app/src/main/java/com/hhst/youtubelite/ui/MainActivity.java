@@ -287,12 +287,13 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 	}
 
 	/**
-	 * DeX Mode keyboard shortcuts (only when a video is open in the player and it is either
-	 * fullscreen or playing): Space = play/pause, Left/Right = seek ±5s, Up/Down = volume,
-	 * F = fullscreen, M = mute, Shift+Left/Right = queue previous/next, Ctrl+Shift+R = reload.
-	 * Only active while running on DeX with the DeX Mode setting on; on phones these keys
-	 * keep their normal behavior. Keystrokes are not stolen while the WebView (e.g. the
-	 * search box) has focus — only the explicit Ctrl+Shift+R reload still works there.
+	 * DeX Mode keyboard shortcuts (when a video is open in the player): Space = play/pause,
+	 * Left/Right = seek ±5s, Up/Down = volume, F = fullscreen, M = mute, Esc = exit
+	 * fullscreen, Shift+Left/Right = queue previous/next, Ctrl+Shift+R = reload. Only active
+	 * while running on DeX with the DeX Mode setting on; on phones these keys keep their
+	 * normal behavior. The player takes focus when it opens (and on click), so shortcuts
+	 * work out of the box; while the WebView (e.g. the search box) has focus, keystrokes are
+	 * not stolen — only the explicit Ctrl+Shift+R reload still works there.
 	 */
 	@Override
 	public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
@@ -301,7 +302,6 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 						&& isDeXModeActive()
 						&& player.isPlaybackOpen()
 						&& !DeviceUtils.isInPictureInPictureMode(this)
-						&& (player.isFullscreen() || player.isPlaying())
 						&& (webViewHasFocus() == false || isReloadShortcut(event))
 						&& handleDeXShortcut(event)) {
 			return true;
@@ -374,6 +374,9 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 				return true;
 			case KeyEvent.KEYCODE_M:
 				if (event.getRepeatCount() == 0) toggleMute();
+				return true;
+			case KeyEvent.KEYCODE_ESCAPE:
+				if (event.getRepeatCount() == 0 && player.isFullscreen()) player.exitFullscreen();
 				return true;
 			default:
 				return false;
