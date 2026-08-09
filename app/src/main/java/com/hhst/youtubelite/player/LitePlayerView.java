@@ -919,6 +919,11 @@ public class LitePlayerView extends PlayerView {
 	private void updateFullscreenButton(boolean fullscreen) {
 		ImageButton fullscreenButton = findViewById(R.id.btn_fullscreen);
 		if (fullscreenButton != null) {
+			if (DexUtils.isDeXRunning(activity) && prefs.isDeXModeEnabled()) {
+				// DeX: fullscreen is forced on, so the fullscreen button is a Download
+				// button (icon set by Controller.setupPlaybackButtons) — never overwrite it.
+				return;
+			}
 			fullscreenButton.setImageResource(
 							fullscreen ? R.drawable.ic_fullscreen_exit : R.drawable.ic_fullscreen);
 		}
