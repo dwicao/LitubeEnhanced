@@ -62,7 +62,7 @@ public class ImageFragment extends Fragment {
 			return root;
 		}
 
-		ImageUtils.loadThumb(photoView, url, new Callback() {
+		ImageUtils.loadFull(photoView, url, new Callback() {
 			@Override
 			public void onSuccess() {
 			}

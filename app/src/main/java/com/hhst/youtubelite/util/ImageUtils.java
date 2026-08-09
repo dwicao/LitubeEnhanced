@@ -30,6 +30,31 @@ public final class ImageUtils {
 			showThumb(view);
 			return;
 		}
+		// .fit() decodes the thumbnail at the ImageView's own size instead of the full
+		// source resolution (e.g. 1280x720) — a big memory/bandwidth saving in lists.
+		var request = Picasso.get()
+						.load(url)
+						.fit()
+						.placeholder(THUMB)
+						.error(THUMB);
+		if (callback == null) {
+			request.into(view);
+			return;
+		}
+		request.into(view, callback);
+	}
+
+	/**
+	 * Loads an image at its full source resolution (no downscaling) — for the gallery's
+	 * zoomable PhotoView, where a downscaled bitmap would look blurry when zoomed.
+	 */
+	public static void loadFull(@NonNull ImageView view,
+	                            @Nullable String url,
+	                            @Nullable Callback callback) {
+		if (url == null || url.isBlank()) {
+			showThumb(view);
+			return;
+		}
 		var request = Picasso.get()
 						.load(url)
 						.placeholder(THUMB)

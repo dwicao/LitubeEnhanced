@@ -321,7 +321,9 @@ public class StreamDownloaderImpl implements StreamDownloader {
 		try (Response resp = client.newCall(rb.build()).execute()) {
 			if (!resp.isSuccessful()) throw new IOException("GET " + resp.code());
 			try (InputStream is = resp.body().byteStream()) {
-				byte[] buf = new byte[8192];
+				// 64KB read buffer: 8x fewer syscalls/lock acquisitions/progress callbacks
+				// than a small buffer during long video downloads.
+				byte[] buf = new byte[65536];
 				int read;
 				long offset = start;
 				while ((read = is.read(buf)) != -1) {

@@ -344,6 +344,9 @@ public class YoutubeWebview extends WebView {
 		settings.setDatabaseEnabled(true);
 		settings.setDomStorageEnabled(true);
 		settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+		// Pre-render offscreen (hidden) tabs so switching between them is instant instead of
+		// re-loading the page (API 26+; minSdk is 26).
+		settings.setOffscreenPreRaster(true);
 		settings.setLoadWithOverviewMode(true);
 		settings.setUseWideViewPort(true);
 		settings.setLoadsImagesAutomatically(true);
