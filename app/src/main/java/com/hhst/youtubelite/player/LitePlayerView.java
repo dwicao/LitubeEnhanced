@@ -41,6 +41,7 @@ import com.hhst.youtubelite.player.common.PlayerPreferences;
 import com.hhst.youtubelite.player.controller.ControllerState;
 import com.hhst.youtubelite.player.sponsor.SponsorBlockManager;
 import com.hhst.youtubelite.player.sponsor.SponsorOverlayView;
+import com.hhst.youtubelite.util.DexUtils;
 import com.hhst.youtubelite.util.ViewUtils;
 
 import java.util.ArrayList;
@@ -778,6 +779,7 @@ public class LitePlayerView extends PlayerView {
 		portraitNormalStateRequested = false;
 		ViewUtils.setFullscreen(activity.getWindow().getDecorView(), false);
 		updatePlayerLayout(false);
+		applyDeXPlayerWidth(1.0f);
 		setResizeMode(inAppMiniPlayer ? AspectRatioFrameLayout.RESIZE_MODE_FIT : defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(false);
@@ -791,12 +793,42 @@ public class LitePlayerView extends PlayerView {
 			normalHeight = playerHeight;
 		}
 		setParentInsetsSuppressed(true);
-		activity.setRequestedOrientation(fsOrientation);
-		ViewUtils.setFullscreen(activity.getWindow().getDecorView(), true);
+		// DeX Mode: the window is a desktop freeform window — forcing orientation or hiding
+		// the system UI would fight the DeX taskbar, so only the orientation request is kept
+		// on phones. On DeX the player is narrowed to 70% of the width so the WebView (video
+		// description + comments) stays visible on the right 30%, like a desktop video page.
+		boolean deX = DexUtils.isDeXRunning(activity);
+		if (!deX) {
+			activity.setRequestedOrientation(fsOrientation);
+			ViewUtils.setFullscreen(activity.getWindow().getDecorView(), true);
+		} else {
+			// DeX: make the player focusable so keyboard shortcuts work immediately, and any
+			// tap on the player moves focus away from the WebView search box (so shortcuts
+			// don't steal keystrokes while the user is typing).
+			setFocusable(true);
+			setFocusableInTouchMode(true);
+			requestFocus();
+		}
 		updatePlayerLayout(true);
+		applyDeXPlayerWidth(deX ? 0.7f : 1.0f);
 		setResizeMode(defaultResizeMode);
 		updateMiniPlayerCornerClipping();
 		updateFullscreenButton(true);
+	}
+
+	/**
+	 * DeX Mode: resizes the player to the given fraction of its parent's width (1.0 = full
+	 * width, 0.7 = left 70% so the WebView shows on the right 30%). No-op outside DeX and
+	 * while the mini player is active (it manages its own width).
+	 */
+	private void applyDeXPlayerWidth(float percent) {
+		if (!DexUtils.isDeXRunning(activity)) return;
+		if (inAppMiniPlayer) return;
+		if (!(getLayoutParams() instanceof ConstraintLayout.LayoutParams constraintParams)) return;
+		constraintParams.width = 0;
+		constraintParams.matchConstraintPercentWidth = percent;
+		constraintParams.horizontalBias = percent >= 1.0f ? 0.5f : 0.0f;
+		requestLayout();
 	}
 
 	private void applyPictureInPictureState(@NonNull ControllerState.Mode previousState) {

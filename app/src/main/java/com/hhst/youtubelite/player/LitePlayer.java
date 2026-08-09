@@ -528,6 +528,48 @@ public class LitePlayer {
 		return activeId;
 	}
 
+	/**
+	 * Whether a video is currently loaded in the player (set when playback starts, cleared
+	 * when the player is hidden or released). Used to decide whether keyboard/mouse
+	 * shortcuts should be intercepted (DeX Mode).
+	 */
+	public boolean isPlaybackOpen() {
+		return activeId != null;
+	}
+
+	/**
+	 * Space-bar shortcut: toggles play/pause of the current video.
+	 */
+	public void togglePlayPause() {
+		if (engine.isPlaying()) {
+			engine.pause();
+		} else {
+			engine.play();
+		}
+	}
+
+	/**
+	 * Seeks the current video by the given offset (negative = backwards), e.g. ±5000 ms
+	 * for the Left/Right arrow shortcuts.
+	 */
+	public void seekBy(long ms) {
+		engine.seekBy(ms);
+	}
+
+	/**
+	 * Skips to the next item in the local queue (Shift+Right shortcut).
+	 */
+	public void skipToNext() {
+		engine.skipToNext();
+	}
+
+	/**
+	 * Skips to the previous item in the local queue (Shift+Left shortcut).
+	 */
+	public void skipToPrevious() {
+		engine.skipToPrevious();
+	}
+
 	@NonNull
 	public PlayerLoopMode getLoopMode() {
 		return controller.getLoopMode();

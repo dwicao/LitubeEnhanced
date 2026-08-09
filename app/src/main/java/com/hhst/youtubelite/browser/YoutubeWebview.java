@@ -42,6 +42,7 @@ import com.hhst.youtubelite.player.LitePlayer;
 import com.hhst.youtubelite.player.queue.QueueRepository;
 import com.hhst.youtubelite.ui.MainActivity;
 import com.hhst.youtubelite.ui.widget.LoadingProgressBar;
+import com.hhst.youtubelite.util.DexUtils;
 import com.hhst.youtubelite.util.PermissionUtils;
 import com.hhst.youtubelite.util.StreamIOUtils;
 import com.hhst.youtubelite.util.ToastUtils;
@@ -122,6 +123,9 @@ public class YoutubeWebview extends WebView {
 					}
 					})();
 					""";
+	private static final String MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+	private static final String DESKTOP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 	private final ArrayList<String> scripts = new ArrayList<>();
 	/**
 	 * Deferred WebView media permission (microphone for YouTube voice search) while the
@@ -149,6 +153,7 @@ public class YoutubeWebview extends WebView {
 	private LoadingProgressBar progressBar;
 	@Nullable
 	private PoTokenContextStore poTokenContextStore;
+	private boolean deXDesktopMode;
 	private volatile boolean initialized;
 	@Nullable
 	private volatile String poTokenInflightKey;
@@ -275,6 +280,18 @@ public class YoutubeWebview extends WebView {
 		progressBar = findViewById(R.id.progressBar);
 	}
 
+	/**
+	 * Switches between the desktop (DeX) and mobile layouts at runtime — e.g. when DeX is
+	 * connected or disconnected while the app is running. Changing only the User-Agent makes
+	 * YouTube re-render the current page with the desktop or mobile layout.
+	 */
+	public void setDeXDesktopMode(boolean enabled) {
+		if (deXDesktopMode == enabled) return;
+		deXDesktopMode = enabled;
+		getSettings().setUserAgentString(enabled ? DESKTOP_USER_AGENT : MOBILE_USER_AGENT);
+		if (getUrl() != null) reload();
+	}
+
 	@Override
 	public void loadUrl(@NonNull String url) {
 		String loadUrl = sanitizeLoadUrl(url);
@@ -335,7 +352,18 @@ public class YoutubeWebview extends WebView {
 		settings.setMediaPlaybackRequiresUserGesture(false);
 		settings.setAllowFileAccess(true);
 		settings.setAllowContentAccess(true);
-		settings.setUserAgentString("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+		settings.setUserAgentString(MOBILE_USER_AGENT);
+		// DeX Mode: on Samsung DeX (or any large-screen presentation display) use a desktop
+		// User-Agent so YouTube serves its desktop layout — multi-column recommendation/search
+		// grids and the side-by-side player + comments view — which is what makes the app feel
+		// like a desktop app. The m.youtube.com -> www.youtube.com redirect that follows is
+		// already handled by UrlUtils.getPageClassFromHost.
+		deXDesktopMode = DexUtils.isDeXRunning(getContext())
+						&& extensionManager != null
+						&& extensionManager.isEnabled(Constant.DEX_MODE);
+		if (deXDesktopMode) {
+			settings.setUserAgentString(DESKTOP_USER_AGENT);
+		}
 
 		JavascriptInterface jsInterface = new JavascriptInterface(this, youtubeExtractor, player, extensionManager, tabManager, queueRepository);
 		addJavascriptInterface(jsInterface, "lite");

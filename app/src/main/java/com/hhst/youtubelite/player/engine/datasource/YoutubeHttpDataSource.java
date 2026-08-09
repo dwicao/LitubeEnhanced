@@ -176,14 +176,32 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 
 		HttpURLConnection httpURLConnection;
 		String responseMessage;
-		try {
-			this.connection = makeConnection(dataSpec);
-			httpURLConnection = this.connection;
-			responseCode = httpURLConnection.getResponseCode();
-			responseMessage = httpURLConnection.getResponseMessage();
-		} catch (IOException e) {
-			closeConnectionQuietly();
-			throw HttpDataSourceException.createForIOException(e, dataSpec, HttpDataSourceException.TYPE_OPEN);
+		boolean alternateProfile = false;
+		while (true) {
+			try {
+				this.connection = makeConnection(dataSpec, alternateProfile);
+				httpURLConnection = this.connection;
+				responseCode = httpURLConnection.getResponseCode();
+				responseMessage = httpURLConnection.getResponseMessage();
+			} catch (IOException e) {
+				closeConnectionQuietly();
+				throw HttpDataSourceException.createForIOException(e, dataSpec, HttpDataSourceException.TYPE_OPEN);
+			}
+
+			if (responseCode == 403 && !alternateProfile
+							&& isVideoPlaybackUrl(httpURLConnection.getURL())) {
+				// googlevideo answers HTTP 403 when the requesting client (User-Agent + method)
+				// does not match the client the URL was issued to — the URL is then rejected
+				// even though the same URL works for the matching client. ExoPlayer already
+				// retries the open, but a mismatched profile fails every time, so retry once
+				// here with the opposite client profile (browser GET <-> app POST + its UA)
+				// before letting the error surface.
+				Log.w(TAG, "HTTP 403 on stream URL; retrying once with the alternate client profile");
+				closeConnectionQuietly();
+				alternateProfile = true;
+				continue;
+			}
+			break;
 		}
 
 		if (responseCode < 200 || responseCode > 299) {
@@ -272,8 +290,13 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 		}
 	}
 
+	private static boolean isVideoPlaybackUrl(@NonNull java.net.URL url) {
+		String path = url.getPath();
+		return path != null && path.startsWith("/videoplayback");
+	}
+
 	@NonNull
-	private HttpURLConnection makeConnection(@NonNull DataSpec dataSpecToUse) throws IOException {
+	private HttpURLConnection makeConnection(@NonNull DataSpec dataSpecToUse, boolean alternateProfile) throws IOException {
 		URL url = new URL(dataSpecToUse.uri.toString());
 		@HttpMethod int httpMethod = dataSpecToUse.httpMethod;
 		long position = dataSpecToUse.position;
@@ -281,12 +304,12 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 		boolean allowGzip = dataSpecToUse.isFlagSet(DataSpec.FLAG_ALLOW_GZIP);
 
 		if (!allowCrossProtocolRedirects && !keepPostFor302Redirects)
-			return makeConnection(url, position, length, allowGzip, true, dataSpecToUse.httpRequestHeaders);
+			return makeConnection(url, position, length, allowGzip, true, dataSpecToUse.httpRequestHeaders, alternateProfile);
 
 		// Follow redirects manually so POST and range handling stay intact.
 		int redirectCount = 0;
 		while (redirectCount++ <= MAX_REDIRECTS) {
-			HttpURLConnection connection = makeConnection(url, position, length, allowGzip, false, dataSpecToUse.httpRequestHeaders);
+			HttpURLConnection connection = makeConnection(url, position, length, allowGzip, false, dataSpecToUse.httpRequestHeaders, alternateProfile);
 			int code = connection.getResponseCode();
 			String location = connection.getHeaderField(HttpHeaders.LOCATION);
 
@@ -316,7 +339,7 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 	}
 
 	@NonNull
-	private HttpURLConnection makeConnection(@NonNull URL url, long position, long length, boolean allowGzip, boolean followRedirects, final Map<String, String> requestParameters) throws IOException {
+	private HttpURLConnection makeConnection(@NonNull URL url, long position, long length, boolean allowGzip, boolean followRedirects, final Map<String, String> requestParameters, boolean alternateProfile) throws IOException {
 		String requestUrl = url.toString();
 
 		boolean isVideoPlaybackUrl = url.getPath().startsWith("/videoplayback");
@@ -372,7 +395,15 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 		boolean isAndroidVrRequest = isAndroidVrStreamingUrl(requestUrl);
 		boolean isAndroidRequest = isAndroidStreamingUrl(requestUrl);
 		boolean isIosRequest = isIosStreamingUrl(requestUrl);
-		if (isWebClientRequest)
+		if (alternateProfile) {
+			// 403 fallback: try the opposite client profile — the browser profile (Chrome UA +
+			// plain GET) for app-client URLs, or the VR app profile (VR UA + POST) for
+			// web-client URLs.
+			if (isWebClientRequest)
+				conn.setRequestProperty(HttpHeaders.USER_AGENT, YOUTUBE_ANDROID_VR_USER_AGENT);
+			else
+				conn.setRequestProperty(HttpHeaders.USER_AGENT, YOUTUBE_WEB_USER_AGENT);
+		} else if (isWebClientRequest)
 			conn.setRequestProperty(HttpHeaders.USER_AGENT, YOUTUBE_WEB_USER_AGENT);
 		else if (isAndroidVrRequest)
 			conn.setRequestProperty(HttpHeaders.USER_AGENT, YOUTUBE_ANDROID_VR_USER_AGENT);
@@ -387,7 +418,9 @@ public final class YoutubeHttpDataSource extends BaseDataSource implements HttpD
 		conn.setInstanceFollowRedirects(followRedirects);
 		// The protobuf POST body mirrors the official Android/iOS apps and is only used for the
 		// mobile clients; web-client URLs are fetched with a plain GET like a browser would.
-		if (isVideoPlaybackUrl && !isWebClientRequest) {
+		boolean usePost = isVideoPlaybackUrl && !isWebClientRequest;
+		if (alternateProfile) usePost = !usePost;
+		if (usePost) {
 			conn.setRequestMethod("POST");
 			conn.setDoOutput(true);
 			conn.setFixedLengthStreamingMode(POST_BODY.length);

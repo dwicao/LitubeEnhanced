@@ -1,5 +1,6 @@
 package com.hhst.youtubelite.extension;
 
+import static com.hhst.youtubelite.Constant.DEX_MODE;
 import static com.hhst.youtubelite.Constant.ENABLE_BACKGROUND_PLAY;
 import static com.hhst.youtubelite.Constant.ENABLE_IN_APP_MINI_PLAYER;
 import static com.hhst.youtubelite.Constant.ENABLE_PIP;
@@ -66,6 +67,7 @@ public final class Constant {
 					Map.entry(ENABLE_IN_APP_MINI_PLAYER, true),
 					Map.entry(REMEMBER_RESIZE_MODE, false),
 					Map.entry(FULLSCREEN_ORIENTATION_LOCK, true),
+					Map.entry(DEX_MODE, true),
 					Map.entry(REMEMBER_PLAYBACK_SPEED, false),
 					Map.entry(GESTURE_TAP_WINDOWED, true),
 					Map.entry(GESTURE_TAP_FULLSCREEN, true),

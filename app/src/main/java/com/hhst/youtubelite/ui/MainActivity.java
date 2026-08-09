@@ -5,9 +5,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Rect;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -15,7 +18,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.TextView;
 
@@ -62,6 +68,7 @@ import com.hhst.youtubelite.player.queue.QueueRepository;
 import com.hhst.youtubelite.ui.queue.QueueAdapter;
 import com.hhst.youtubelite.ui.queue.QueueTouch;
 import com.hhst.youtubelite.util.DeviceUtils;
+import com.hhst.youtubelite.util.DexUtils;
 import com.hhst.youtubelite.util.PermissionUtils;
 import com.hhst.youtubelite.util.ToastUtils;
 import com.hhst.youtubelite.util.UrlUtils;
@@ -123,6 +130,13 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 	private boolean micPermissionRequested;
 	@Nullable
 	private AlertDialog micPermissionDialog;
+	@Nullable
+	private AudioManager audioManager;
+	@Nullable
+	private View playerRoot;
+	private boolean musicMuted;
+	private int lastMusicVolume = -1;
+	private static final String DEX_WINDOW_PREFS = "dex_window";
 
 	static boolean shouldEnterPictureInPicture(@Nullable LitePlayer player,
 	                                           @Nullable ExtensionManager extensionManager,
@@ -159,7 +173,9 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 			hintText.setPadding(pad, pad / 2, pad, pad / 2);
 		}
 
-		View playerRoot = findViewById(R.id.playerView);
+		audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+		playerRoot = findViewById(R.id.playerView);
+		restoreDeXWindow();
 		playerRoot.post(() -> {
 			findViewById(R.id.btn_queue).setOnClickListener(v -> showQueueBottomSheet());
 			findViewById(R.id.btn_mini_queue).setOnClickListener(v -> showQueueBottomSheet());
@@ -265,6 +281,235 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 		// The activity is not recreated (see configChanges in the manifest); keep the
 		// player's rotation/fullscreen state in sync with the new configuration.
 		if (player != null) player.syncRotation(DeviceUtils.isRotateOn(this), newConfig.orientation);
+		// DeX can be connected/disconnected while the app is running; switch the WebView
+		// between the desktop and mobile layout accordingly.
+		applyDeXModeToWebView();
+	}
+
+	/**
+	 * DeX Mode keyboard shortcuts (only when a video is open in the player and it is either
+	 * fullscreen or playing): Space = play/pause, Left/Right = seek ±5s, Up/Down = volume,
+	 * F = fullscreen, M = mute, Shift+Left/Right = queue previous/next, Ctrl+Shift+R = reload.
+	 * Only active while running on DeX with the DeX Mode setting on; on phones these keys
+	 * keep their normal behavior. Keystrokes are not stolen while the WebView (e.g. the
+	 * search box) has focus — only the explicit Ctrl+Shift+R reload still works there.
+	 */
+	@Override
+	public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
+		if (event.getAction() == KeyEvent.ACTION_DOWN
+						&& player != null
+						&& isDeXModeActive()
+						&& player.isPlaybackOpen()
+						&& !DeviceUtils.isInPictureInPictureMode(this)
+						&& (player.isFullscreen() || player.isPlaying())
+						&& (webViewHasFocus() == false || isReloadShortcut(event))
+						&& handleDeXShortcut(event)) {
+			return true;
+		}
+		return super.dispatchKeyEvent(event);
+	}
+
+	private boolean isReloadShortcut(@NonNull KeyEvent event) {
+		return event.getKeyCode() == KeyEvent.KEYCODE_R
+						&& event.isCtrlPressed()
+						&& event.isShiftPressed();
+	}
+
+	private boolean webViewHasFocus() {
+		YoutubeWebview webView = getWebView();
+		return webView != null && webView.hasFocus();
+	}
+
+	/**
+	 * DeX Mode is only active on a real Samsung DeX display with the DeX Mode toggle on.
+	 */
+	private boolean isDeXModeActive() {
+		return DexUtils.isDeXRunning(this)
+						&& extensionManager != null
+						&& extensionManager.isEnabled(Constant.DEX_MODE);
+	}
+
+	private boolean handleDeXShortcut(@NonNull KeyEvent event) {
+		int keyCode = event.getKeyCode();
+		if (keyCode == KeyEvent.KEYCODE_R
+						&& event.isCtrlPressed()
+						&& event.isShiftPressed()) {
+			YoutubeWebview webView = getWebView();
+			if (webView != null) webView.reload();
+			return true;
+		}
+		if (event.isCtrlPressed() || event.isAltPressed()) return false;
+		if (event.isShiftPressed()) {
+			if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+				player.skipToPrevious();
+				return true;
+			}
+			if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+				player.skipToNext();
+				return true;
+			}
+			return false;
+		}
+		switch (keyCode) {
+			case KeyEvent.KEYCODE_SPACE:
+				if (event.getRepeatCount() == 0) player.togglePlayPause();
+				return true;
+			case KeyEvent.KEYCODE_DPAD_LEFT:
+				player.seekBy(-5000);
+				return true;
+			case KeyEvent.KEYCODE_DPAD_RIGHT:
+				player.seekBy(5000);
+				return true;
+			case KeyEvent.KEYCODE_DPAD_UP:
+				adjustVolumeBy(true);
+				return true;
+			case KeyEvent.KEYCODE_DPAD_DOWN:
+				adjustVolumeBy(false);
+				return true;
+			case KeyEvent.KEYCODE_F:
+				if (event.getRepeatCount() == 0) {
+					if (player.isFullscreen()) player.exitFullscreen();
+					else player.enterFullscreen();
+				}
+				return true;
+			case KeyEvent.KEYCODE_M:
+				if (event.getRepeatCount() == 0) toggleMute();
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	/**
+	 * DeX Mode mouse support (only on DeX): scroll wheel over the player adjusts volume;
+	 * secondary (right) click over the player opens a context menu (play/pause, fullscreen,
+	 * PiP, download, reload).
+	 */
+	@Override
+	public boolean dispatchGenericMotionEvent(@NonNull MotionEvent event) {
+		if (isDeXModeActive() && player != null && player.isPlaybackOpen() && !DeviceUtils.isInPictureInPictureMode(this)) {
+			if (event.getAction() == MotionEvent.ACTION_SCROLL && isEventOverPlayer(event)) {
+				float delta = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+				if (delta > 0) adjustVolumeBy(true);
+				else if (delta < 0) adjustVolumeBy(false);
+				return true;
+			}
+			if (event.getAction() == MotionEvent.ACTION_BUTTON_PRESS
+							&& (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0
+							&& isEventOverPlayer(event)) {
+				showPlayerContextMenu();
+				return true;
+			}
+		}
+		return super.dispatchGenericMotionEvent(event);
+	}
+
+	private boolean isEventOverPlayer(@NonNull MotionEvent event) {
+		if (playerRoot == null || playerRoot.getVisibility() != View.VISIBLE) return false;
+		Rect rect = new Rect();
+		return playerRoot.getGlobalVisibleRect(rect)
+						&& rect.contains((int) event.getRawX(), (int) event.getRawY());
+	}
+
+	private void adjustVolumeBy(boolean up) {
+		if (audioManager == null) return;
+		audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+						up ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER, 0);
+	}
+
+	private void toggleMute() {
+		if (audioManager == null) return;
+		if (musicMuted) {
+			audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, Math.max(lastMusicVolume, 0), 0);
+			musicMuted = false;
+		} else {
+			lastMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+			audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0);
+			musicMuted = true;
+		}
+	}
+
+	private void showPlayerContextMenu() {
+		if (player == null) return;
+		CharSequence[] items = {
+						player.isPlaying() ? "Pause" : "Play",
+						player.isFullscreen() ? "Exit fullscreen" : "Fullscreen",
+						"Picture-in-picture",
+						"Download",
+						"Reload page"
+		};
+		new AlertDialog.Builder(this)
+						.setTitle("Player")
+						.setItems(items, (dialog, which) -> {
+							switch (which) {
+								case 0 -> player.togglePlayPause();
+								case 1 -> {
+									if (player.isFullscreen()) player.exitFullscreen();
+									else player.enterFullscreen();
+								}
+								case 2 -> player.enterPictureInPicture();
+								case 3 -> {
+									String url = currentUrl();
+									if (url != null && youtubeExtractor != null) {
+										new DownloadDialog(url, this, youtubeExtractor).show();
+									}
+								}
+								case 4 -> {
+									YoutubeWebview webView = getWebView();
+									if (webView != null) webView.reload();
+								}
+								default -> { }
+							}
+						})
+						.show();
+	}
+
+	/**
+	 * DeX Mode: keeps the WebView in sync with the current DeX state (desktop layout when
+	 * running on DeX and the DeX Mode setting is on, mobile layout otherwise).
+	 */
+	private void applyDeXModeToWebView() {
+		YoutubeWebview webView = getWebView();
+		if (webView == null) return;
+		boolean wantDeX = DexUtils.isDeXRunning(this)
+						&& extensionManager != null
+						&& extensionManager.isEnabled(Constant.DEX_MODE);
+		webView.setDeXDesktopMode(wantDeX);
+	}
+
+	/**
+	 * DeX Mode: remembers the window size/position so it can be restored next launch
+	 * (best-effort; only meaningful for freeform DeX windows).
+	 */
+	private void saveDeXWindow() {
+		if (!DexUtils.isDeXRunning(this)) return;
+		try {
+			WindowManager.LayoutParams attrs = getWindow().getAttributes();
+			getSharedPreferences(DEX_WINDOW_PREFS, MODE_PRIVATE).edit()
+							.putInt("w", getWindow().getDecorView().getWidth())
+							.putInt("h", getWindow().getDecorView().getHeight())
+							.putInt("x", attrs.x)
+							.putInt("y", attrs.y)
+							.apply();
+		} catch (Exception ignored) {
+		}
+	}
+
+	private void restoreDeXWindow() {
+		if (!DexUtils.isDeXRunning(this)) return;
+		try {
+			SharedPreferences prefs = getSharedPreferences(DEX_WINDOW_PREFS, MODE_PRIVATE);
+			int w = prefs.getInt("w", 0);
+			int h = prefs.getInt("h", 0);
+			if (w <= 0 || h <= 0) return;
+			WindowManager.LayoutParams attrs = getWindow().getAttributes();
+			attrs.width = w;
+			attrs.height = h;
+			attrs.x = prefs.getInt("x", attrs.x);
+			attrs.y = prefs.getInt("y", attrs.y);
+			getWindow().setAttributes(attrs);
+		} catch (Exception ignored) {
+		}
 	}
 
 	private void handleIntent(@Nullable Intent intent) {
@@ -651,6 +896,7 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 		if (player != null && player.isInMiniPlayer() && !isChangingConfigurations() && !DeviceUtils.isInPictureInPictureMode(this)) {
 			player.suspendInAppMiniPlayerUiIfNeeded();
 		}
+		saveDeXWindow();
 		super.onStop();
 	}
 

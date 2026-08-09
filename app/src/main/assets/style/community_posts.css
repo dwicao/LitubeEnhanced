@@ -1,0 +1,6 @@
+/*
+ * Feed noise is removed by script/hide_feed_noise.js, which keys off the stable
+ * /post/ link signature and the "Shorts" shelf title instead of layout-specific
+ * element names (YouTube keeps changing those, so CSS-only hiding broke).
+ * Kept as an empty file so the automatic style/ scan stays predictable.
+ */

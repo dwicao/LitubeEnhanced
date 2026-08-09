@@ -7,6 +7,7 @@ public final class Constant {
 	public static final String LOGGING_FILENAME = "log.txt";
 	public static final String HOME_URL = "https://m.youtube.com";
 	public static final String YOUTUBE_DOMAIN = "youtube.com";
+	public static final String YOUTUBE_DESKTOP_HOST = "www.youtube.com";
 	public static final String YOUTUBE_MOBILE_HOST = "m.youtube.com";
 	public static final String PAGE_HOME = "home";
 	public static final String PAGE_SHORTS = "shorts";
@@ -22,6 +23,7 @@ public final class Constant {
 	public static final String ENABLE_IN_APP_MINI_PLAYER = "enable_in_app_mini_player";
 	public static final String REMEMBER_RESIZE_MODE = "remember_resize_mode";
 	public static final String FULLSCREEN_ORIENTATION_LOCK = "fullscreen_orientation_lock";
+	public static final String DEX_MODE = "dex_mode";
 	public static String USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
 
 	private Constant() {

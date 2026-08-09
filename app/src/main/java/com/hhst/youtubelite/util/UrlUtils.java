@@ -173,7 +173,9 @@ public final class UrlUtils {
 		if (lowerHost.equals("youtu.be")) {
 			return segments.isEmpty() ? "unknown" : Constant.PAGE_WATCH;
 		}
-		if (!lowerHost.equals(Constant.YOUTUBE_MOBILE_HOST) && !lowerHost.equals(Constant.YOUTUBE_DOMAIN))
+		if (!lowerHost.equals(Constant.YOUTUBE_MOBILE_HOST)
+						&& !lowerHost.equals(Constant.YOUTUBE_DOMAIN)
+						&& !lowerHost.equals(Constant.YOUTUBE_DESKTOP_HOST))
 			return "unknown";
 
 		if (segments.isEmpty()) return Constant.PAGE_HOME;

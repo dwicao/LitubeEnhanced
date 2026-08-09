@@ -153,6 +153,14 @@ public final class PlayerPreferences {
 		return extensionManager.isEnabled(Constant.FULLSCREEN_ORIENTATION_LOCK);
 	}
 
+	/**
+	 * Whether DeX Mode is enabled (auto-detect DeX and switch to the desktop layout). Turning
+	 * it off forces the mobile layout even on DeX.
+	 */
+	public boolean isDeXModeEnabled() {
+		return extensionManager.isEnabled(Constant.DEX_MODE);
+	}
+
 	public long getResumePosition(@Nullable String videoId) {
 		boolean enabled = extensionManager.isEnabled(Constant.REMEMBER_LAST_POSITION);
 		if (!enabled || videoId == null) return 0;
