@@ -38,6 +38,7 @@ import com.hhst.youtubelite.extractor.StreamCatalog;
 import com.hhst.youtubelite.extractor.VideoDetails;
 import com.hhst.youtubelite.extractor.YoutubeExtractor;
 import com.hhst.youtubelite.gallery.GalleryActivity;
+import com.hhst.youtubelite.player.common.PlayerUtils;
 import com.hhst.youtubelite.util.DownloadStorageUtils;
 import com.hhst.youtubelite.util.ImageUtils;
 import com.hhst.youtubelite.util.PermissionUtils;
@@ -578,7 +579,9 @@ public class DownloadDialog {
 	private List<VideoStream> videoChoices() {
 		List<VideoStream> result = new ArrayList<>();
 		if (catalog == null) return result;
-		for (VideoStream stream : catalog.getVideoStreams()) {
+		// Only offer resolutions this device can actually play (issue #290: 4K VP9 crashes
+		// on 1080p-only decoders), in addition to the MPEG-4 (progressive) requirement.
+		for (VideoStream stream : PlayerUtils.filterPlayableStreams(catalog.getVideoStreams())) {
 			if (stream.getFormat() == MediaFormat.MPEG_4) result.add(stream);
 		}
 		return sortVideoChoices(result);

@@ -216,6 +216,96 @@ public class Engine {
 		return null;
 	}
 
+	/**
+	 * Hard fallback applied right before ExoPlayer receives the video stream (issue #290): the
+	 * max resolution is hard-capped at 1080p — any candidate with height > 1080 (4K, 1440p, ...)
+	 * is swapped for the best playable candidate at or below 1080p before the media source is
+	 * set. This is unconditional because decoder capability reports are unreliable (e.g. a VP9
+	 * decoder that reports 4K/1440p support but then stalls or crashes at 60fps). As a second
+	 * layer, sub-1080p streams whose size exceeds the preferred decoder's capabilities (e.g.
+	 * 1080p60 on a 1080p30-only decoder) are also downgraded.
+	 */
+	private void ensurePlayableVideoCandidate(@NonNull PlaybackPlan plan) {
+		Delivery delivery = plan.getDelivery();
+		if (delivery == null) return;
+		if (plan.getMode() == PlaybackMode.ADAPTIVE) {
+			StreamCandidate selected = plan.getVideoCandidate();
+			VideoStream stream = selected != null ? selected.getVideoStream() : null;
+			if (stream == null) return;
+			if (heightOf(stream) > 1080) {
+				StreamCandidate replacement = bestPlayableCandidate(delivery.getVideo(), 1080);
+				if (replacement != null) {
+					Log.w(TAG, "4KFix: hard-capping " + heightOf(stream) + "p stream to 1080p");
+					plan.setVideoCandidate(replacement);
+				} else {
+					Log.w(TAG, "4KFix: " + heightOf(stream) + "p stream blocked but no <=1080p candidate available");
+				}
+				return;
+			}
+			if (!PlayerUtils.isVideoStreamPlayable(stream, true)) {
+				StreamCandidate replacement =
+								bestPlayableCandidate(delivery.getVideo(), heightOf(stream));
+				if (replacement != null) {
+					Log.w(TAG, "hard fallback: " + heightOf(stream) + "p " + stream.getCodec()
+									+ " exceeds decoder capabilities; using best playable candidate");
+					plan.setVideoCandidate(replacement);
+				}
+			}
+		} else if (plan.getMode() == PlaybackMode.MUXED) {
+			StreamCandidate selected = plan.getMuxedCandidate();
+			VideoStream stream = selected != null ? selected.getVideoStream() : null;
+			if (stream == null) return;
+			if (heightOf(stream) > 1080) {
+				StreamCandidate replacement = bestPlayableCandidate(delivery.getMuxed(), 1080);
+				if (replacement != null) {
+					Log.w(TAG, "4KFix: hard-capping muxed " + heightOf(stream) + "p stream to 1080p");
+					plan.setMuxedCandidate(replacement);
+				} else {
+					Log.w(TAG, "4KFix: muxed " + heightOf(stream) + "p stream blocked but no <=1080p candidate available");
+				}
+				return;
+			}
+			if (!PlayerUtils.isVideoStreamPlayable(stream, true)) {
+				StreamCandidate replacement =
+								bestPlayableCandidate(delivery.getMuxed(), heightOf(stream));
+				if (replacement != null) {
+					Log.w(TAG, "hard fallback: muxed " + heightOf(stream) + "p "
+									+ stream.getCodec() + " exceeds decoder capabilities");
+					plan.setMuxedCandidate(replacement);
+				}
+			}
+		}
+	}
+
+	@Nullable
+	private static StreamCandidate bestPlayableCandidate(@NonNull List<StreamCandidate> candidates,
+	                                                     int maxHeight) {
+		List<VideoStream> streams = new ArrayList<>(candidates.size());
+		for (StreamCandidate candidate : candidates) {
+			if (candidate.getVideoStream() != null) {
+				streams.add(candidate.getVideoStream());
+			}
+		}
+		VideoStream best = PlayerUtils.bestPlayableStream(streams, maxHeight, true);
+		if (best == null) {
+			return null;
+		}
+		for (StreamCandidate candidate : candidates) {
+			if (candidate.getVideoStream() == best) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	private static int heightOf(@NonNull VideoStream stream) {
+		int height = stream.getHeight();
+		if (height > 0) {
+			return height;
+		}
+		return StringUtils.parseHeight(stream.getResolution());
+	}
+
 	@Nullable
 	private static AudioStream selectedAudio(@NonNull PlaybackPlan plan) {
 		if (plan.getAudioCandidate() != null && plan.getAudioCandidate().getAudioStream() != null) {
@@ -344,6 +434,8 @@ public class Engine {
 		this.subtitles = subtitles;
 		applyPlaybackTrackMode();
 
+		ensurePlayableVideoCandidate(plan);
+
 		this.videoStream = selectedVideo(plan);
 		boolean enabled = this.prefs.isSubtitleEnabled();
 		setSubtitlesEnabled(enabled);
@@ -408,6 +500,7 @@ public class Engine {
 		boolean playWhenReady = player.getPlayWhenReady();
 		try {
 			playbackPlan = fallback;
+			ensurePlayableVideoCandidate(fallback);
 			videoStream = selectedVideo(fallback);
 			player.setMediaSource(PlaybackSourceFactory.create(sources,
 							new PlaybackDetails(state.video(), state.catalog(), state.deliveries(),

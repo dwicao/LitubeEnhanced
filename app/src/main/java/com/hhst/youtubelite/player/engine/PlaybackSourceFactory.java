@@ -34,6 +34,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Component that handles app logic.
@@ -154,6 +156,7 @@ class PlaybackSourceFactory {
 								url,
 								stream.getItagItem(),
 								TimeUnit.SECONDS.toMillis(durationSeconds) / 1_000);
+				manifest = ensureSdrColorInfo(manifest);
 				DashManifest parsed = new DashManifestParser().parse(
 								Uri.parse(url),
 								new ByteArrayInputStream(manifest.getBytes(StandardCharsets.UTF_8)));
@@ -172,6 +175,43 @@ class PlaybackSourceFactory {
 		return stream.getItagItem() != null
 						&& stream.getItagItem().getIndexStart() >= 0
 						&& stream.getItagItem().getIndexEnd() >= 0;
+	}
+
+	/**
+	 * Matches a video {@code <AdaptationSet>} (mimeType="video/...") together with the first
+	 * {@code <Representation>} inside it that does not already declare color information. Group
+	 * 1 = the AdaptationSet tag, group 2 = the elements between the tags (e.g. {@code <Role>}),
+	 * group 3 = the Representation start tag without its trailing {@code >}.
+	 */
+	private static final Pattern VIDEO_REPRESENTATION_TAG = Pattern.compile(
+					"(<AdaptationSet\\b(?=[^>]*mimeType=\"video/[^\"]*\")[^>]*>)"
+									+ "((?:(?!</AdaptationSet>).)*?)"
+									+ "(<Representation\\b(?![^>]*\\bvideoRange=)[^>]*)>");
+
+	/**
+	 * The progressive DASH manifests generated for direct streams carry no color information, so
+	 * ExoPlayer builds a Format without ColorInfo and the device's decoder falls back to its
+	 * default range/matrix — on many devices that renders AVC (30fps) streams with a wrong color
+	 * cast (e.g. blue-ish skin). YouTube SDR is BT709 / limited range / SDR, so when the video
+	 * representation lacks color attributes they are injected here; ExoPlayer's
+	 * {@link DashManifestParser} maps them to a {@code ColorInfo(BT709, LIMITED, SDR)}.
+	 */
+	@NonNull
+	static String ensureSdrColorInfo(@NonNull String manifest) {
+		Matcher matcher = VIDEO_REPRESENTATION_TAG.matcher(manifest);
+		if (!matcher.find()) {
+			return manifest;
+		}
+		String colorAttributes = " videoRange=\"limited\" colourPrimaries=\"BT709\""
+						+ " transferCharacteristics=\"SDR\" matrixCoefficients=\"BT709\"";
+		StringBuffer sb = new StringBuffer();
+		do {
+			String replacement = matcher.group(1) + matcher.group(2)
+							+ matcher.group(3) + colorAttributes + ">";
+			matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+		} while (matcher.find());
+		matcher.appendTail(sb);
+		return sb.toString();
 	}
 
 	@NonNull

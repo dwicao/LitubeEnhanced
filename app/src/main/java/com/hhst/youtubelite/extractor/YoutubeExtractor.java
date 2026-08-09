@@ -5,6 +5,7 @@ import androidx.annotation.Nullable;
 
 import com.google.gson.Gson;
 import com.hhst.youtubelite.extractor.potoken.LitePoTokenProvider;
+import com.hhst.youtubelite.player.common.PlayerUtils;
 
 import org.schabi.newpipe.extractor.Image;
 import org.schabi.newpipe.extractor.MediaFormat;
@@ -301,7 +302,11 @@ public final class YoutubeExtractor {
 			addFallbackManifests(catalog, streamInfo, live);
 		}
 		if (catalog.getVideoCandidates().isEmpty()) {
-			for (VideoStream stream : normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoOnlyStreams()))) {
+			List<VideoStream> playable = PlayerUtils.filterPlayableStreams(normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoOnlyStreams())));
+			if (playable.isEmpty()) {
+				playable = normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoOnlyStreams()));
+			}
+			for (VideoStream stream : playable) {
 				catalog.getVideoCandidates().add(StreamCandidate.videoOnly(stream, null, false, false, live));
 			}
 		}
@@ -311,7 +316,11 @@ public final class YoutubeExtractor {
 			}
 		}
 		if (catalog.getMuxedCandidates().isEmpty()) {
-			for (VideoStream stream : normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoStreams()))) {
+			List<VideoStream> playable = PlayerUtils.filterPlayableStreams(normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoStreams())));
+			if (playable.isEmpty()) {
+				playable = normalizeVideoStreams(filterPlayableStreams(streamInfo.getVideoStreams()));
+			}
+			for (VideoStream stream : playable) {
 				catalog.getMuxedCandidates().add(StreamCandidate.muxed(stream, null, false, false, live));
 			}
 		}
@@ -443,7 +452,14 @@ public final class YoutubeExtractor {
 	                             boolean muxed,
 	                             boolean live) {
 		for (final YoutubeStreamExtractor.ItagChoice<VideoStream> choice : choices) {
-			for (VideoStream stream : normalizeVideoStreams(choice.getStreams())) {
+			List<VideoStream> playable = PlayerUtils.filterPlayableStreams(normalizeVideoStreams(choice.getStreams()));
+			if (playable.isEmpty()) {
+				// Every stream in this choice was filtered out (e.g. all are unsupported 4K):
+				// never drop the option entirely — keep the originals so playback still has
+				// something to try rather than failing with no candidates at all.
+				playable = normalizeVideoStreams(choice.getStreams());
+			}
+			for (VideoStream stream : playable) {
 				StreamCandidate candidate = muxed
 								? StreamCandidate.muxed(
 								stream,
