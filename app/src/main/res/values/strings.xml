@@ -5,6 +5,9 @@
     <string name="video">Video</string>
     <string name="cancel">Cancel</string>
     <string name="download">Download</string>
+    <string name="watch_history">Watch history</string>
+    <string name="history_empty">No watch history yet</string>
+    <string name="remove_history_item">Remove from history</string>
     <string name="queue">Queue</string>
     <string name="add_to_queue">Add to queue</string>
     <string name="queue_item_added">Added to queue</string>
@@ -156,6 +159,7 @@
     <string name="delete_local_file">Delete local file</string>
     <string name="clear_history">Clear history</string>
     <string name="clear_history_confirmation">Clear all download history?</string>
+    <string name="clear_watch_history_confirmation">Clear all watch history?</string>
     <string name="status_queued">Queued</string>
     <string name="status_downloading_simple">Downloading</string>
     <string name="status_merging">Merging…</string>

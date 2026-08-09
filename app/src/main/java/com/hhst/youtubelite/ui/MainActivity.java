@@ -65,8 +65,11 @@ import com.hhst.youtubelite.extractor.YoutubeExtractor;
 import com.hhst.youtubelite.extractor.potoken.PoTokenHost;
 import com.hhst.youtubelite.player.LitePlayer;
 import com.hhst.youtubelite.player.common.PlayerLoopMode;
+import com.hhst.youtubelite.player.history.WatchHistoryItem;
+import com.hhst.youtubelite.player.history.WatchHistoryRepository;
 import com.hhst.youtubelite.player.queue.QueueItem;
 import com.hhst.youtubelite.player.queue.QueueRepository;
+import com.hhst.youtubelite.ui.history.HistoryAdapter;
 import com.hhst.youtubelite.ui.queue.QueueAdapter;
 import com.hhst.youtubelite.ui.queue.QueueTouch;
 import com.hhst.youtubelite.util.DeviceUtils;
@@ -76,6 +79,7 @@ import com.hhst.youtubelite.util.ToastUtils;
 import com.hhst.youtubelite.util.UrlUtils;
 import com.hhst.youtubelite.util.ViewUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -98,6 +102,8 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 	TabManager tabManager;
 	@Inject
 	LitePlayer player;
+	@Inject
+	WatchHistoryRepository watchHistory;
 	@Inject
 	YoutubeExtractor youtubeExtractor;
 	@Inject
@@ -189,6 +195,7 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 		playerRoot.post(() -> {
 			findViewById(R.id.btn_queue).setOnClickListener(v -> showQueueBottomSheet());
 			findViewById(R.id.btn_mini_queue).setOnClickListener(v -> showQueueBottomSheet());
+			findViewById(R.id.btn_history).setOnClickListener(v -> showHistoryBottomSheet());
 		});
 		if (PermissionUtils.needsPostNotificationsPermission()
 						&& !PermissionUtils.hasPostNotificationsPermission(this)) {
@@ -918,6 +925,58 @@ public final class MainActivity extends AppCompatActivity implements LifecycleEv
 		String url = currentUrl();
 		if (url == null || youtubeExtractor == null) return;
 		new DownloadDialog(url, this, youtubeExtractor).show();
+	}
+
+	private void showHistoryBottomSheet() {
+		if (DeviceUtils.isInPictureInPictureMode(this)) return;
+		BottomSheetDialog dialog = new BottomSheetDialog(this);
+		View sheetView = getLayoutInflater().inflate(
+						R.layout.bottom_sheet_history, new android.widget.FrameLayout(this), false);
+		dialog.setContentView(sheetView);
+
+		ImageButton clearButton = sheetView.findViewById(R.id.btn_history_clear);
+		TextView emptyView = sheetView.findViewById(R.id.history_empty);
+		RecyclerView recyclerView = sheetView.findViewById(R.id.history_items_recycler);
+		HistoryAdapter[] adapterHolder = new HistoryAdapter[1];
+		HistoryAdapter adapter = new HistoryAdapter(new HistoryAdapter.Actions() {
+			@Override
+			public void onPlayRequested(@NonNull WatchHistoryItem item) {
+				dialog.dismiss();
+				if (item.getVideoId() != null) {
+					tabManager.playInWatch(Constant.HOME_URL + "/watch?v=" + item.getVideoId());
+				}
+			}
+
+			@Override
+			public void onDeleteRequested(@NonNull WatchHistoryItem item) {
+				watchHistory.remove(item.getVideoId());
+				adapterHolder[0].removeItem(item.getVideoId());
+				updateHistoryEmptyState(emptyView, adapterHolder[0]);
+			}
+		});
+		adapterHolder[0] = adapter;
+		recyclerView.setLayoutManager(new LinearLayoutManager(this));
+		recyclerView.setAdapter(adapter);
+
+		adapter.submitList(watchHistory.getAll());
+		updateHistoryEmptyState(emptyView, adapter);
+
+		clearButton.setOnClickListener(v -> new MaterialAlertDialogBuilder(this)
+						.setMessage(R.string.clear_watch_history_confirmation)
+						.setPositiveButton(R.string.confirm, (dialogInterface, which) -> {
+							watchHistory.clear();
+							adapter.submitList(new ArrayList<>());
+							updateHistoryEmptyState(emptyView, adapter);
+						})
+						.setNegativeButton(R.string.cancel, null)
+						.show());
+
+		dialog.show();
+	}
+
+	private static void updateHistoryEmptyState(@NonNull TextView emptyView,
+	                                            @NonNull HistoryAdapter adapter) {
+		emptyView.setVisibility(adapter.getItemCount() == 0 ? View.VISIBLE : View.GONE);
 	}
 
 	public void handleAppBack() {

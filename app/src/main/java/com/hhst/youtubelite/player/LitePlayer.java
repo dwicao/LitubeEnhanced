@@ -87,6 +87,8 @@ public class LitePlayer {
 	private final PlayerStateStore stateStore;
 	@NonNull
 	private final Executor executor;
+	@NonNull
+	private final com.hhst.youtubelite.player.history.WatchHistoryRepository watchHistory;
 	private final MMKV kv = MMKV.defaultMMKV();
 	@Nullable
 	private PlaybackService playbackSvc;
@@ -118,7 +120,8 @@ public class LitePlayer {
 	                  @NonNull QueueRepository queueRepo,
 	                  @NonNull PlayerPreferences prefs,
 	                  @NonNull PlayerStateStore stateStore,
-	                  @NonNull Executor executor) {
+	                  @NonNull Executor executor,
+	                  @NonNull com.hhst.youtubelite.player.history.WatchHistoryRepository watchHistory) {
 		this.activity = activity;
 		this.extractor = extractor;
 		this.playerView = playerView;
@@ -129,6 +132,7 @@ public class LitePlayer {
 		this.prefs = prefs;
 		this.stateStore = stateStore;
 		this.executor = executor;
+		this.watchHistory = watchHistory;
 		playerView.setup();
 		queueRepo.addListener(queueListener);
 		setupEngineListeners();
@@ -302,6 +306,8 @@ public class LitePlayer {
 							}
 							this.activeId = videoId;
 							stateStore.setVideoId(videoId);
+							// Local watch history: record every played video with its title/thumbnail.
+							watchHistory.record(videoId, er.video().getTitle(), er.video().getThumbnailUrl());
 
 							if (playbackSvc != null) {
 								PlaybackService.start(activity);
